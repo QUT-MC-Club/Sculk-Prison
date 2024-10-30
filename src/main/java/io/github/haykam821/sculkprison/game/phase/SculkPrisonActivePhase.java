@@ -8,13 +8,12 @@ import com.google.common.collect.Lists;
 import io.github.haykam821.sculkprison.Main;
 import io.github.haykam821.sculkprison.game.SculkPrisonBar;
 import io.github.haykam821.sculkprison.game.SculkPrisonConfig;
-import io.github.haykam821.sculkprison.game.WardenInventoryManager;
-import io.github.haykam821.sculkprison.game.WinTeam;
+import io.github.haykam821.sculkprison.game.event.WardenDataListener;
 import io.github.haykam821.sculkprison.game.map.SculkPrisonMap;
+import io.github.haykam821.sculkprison.game.player.WardenData;
+import io.github.haykam821.sculkprison.game.player.WinTeam;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.damage.DamageSource;
-import net.minecraft.entity.effect.StatusEffectInstance;
-import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
@@ -37,7 +36,7 @@ import xyz.nucleoid.plasmid.game.rule.GameRuleType;
 import xyz.nucleoid.stimuli.event.player.PlayerAttackEntityEvent;
 import xyz.nucleoid.stimuli.event.player.PlayerDeathEvent;
 
-public class SculkPrisonActivePhase implements PlayerAttackEntityEvent, GameActivityEvents.Enable, GameActivityEvents.Tick, GamePlayerEvents.Offer, PlayerDeathEvent, GamePlayerEvents.Remove {
+public class SculkPrisonActivePhase implements WardenDataListener, PlayerAttackEntityEvent, GameActivityEvents.Enable, GameActivityEvents.Tick, GamePlayerEvents.Offer, PlayerDeathEvent, GamePlayerEvents.Remove {
 	private final ServerWorld world;
 	private final GameSpace gameSpace;
 	private final SculkPrisonMap map;
@@ -45,7 +44,7 @@ public class SculkPrisonActivePhase implements PlayerAttackEntityEvent, GameActi
 	private final SculkPrisonBar bar;
 
 	private final List<ServerPlayerEntity> players;
-	private final ServerPlayerEntity warden;
+	private final WardenData warden;
 	private final boolean singleplayer;
 
 	private int lockTime;
@@ -60,7 +59,7 @@ public class SculkPrisonActivePhase implements PlayerAttackEntityEvent, GameActi
 		this.bar = new SculkPrisonBar(widgets);
 
 		this.players = players;
-		this.warden = this.players.get(this.world.getRandom().nextInt(this.players.size()));
+		this.warden = WardenData.choose(this, this.players, this.world.getRandom());
 		this.singleplayer = this.players.size() == 1;
 
 		this.lockTime = this.config.getLockTime();
@@ -93,6 +92,7 @@ public class SculkPrisonActivePhase implements PlayerAttackEntityEvent, GameActi
 			SculkPrisonActivePhase.setRules(activity, true);
 
 			// Listeners
+			activity.listen(WardenDataListener.EVENT, phase);
 			activity.listen(PlayerAttackEntityEvent.EVENT, phase);
 			activity.listen(GameActivityEvents.ENABLE, phase);
 			activity.listen(GameActivityEvents.TICK, phase);
@@ -104,8 +104,17 @@ public class SculkPrisonActivePhase implements PlayerAttackEntityEvent, GameActi
 
 	// Listeners
 	@Override
+	public WardenData getWardenData(ServerPlayerEntity entity) {
+		if (this.warden.isOf(entity)) {
+			return this.warden;
+		}
+
+		return null;
+	}
+
+	@Override
 	public ActionResult onAttackEntity(ServerPlayerEntity attacker, Hand hand, Entity attacked, EntityHitResult hitResult) {
-		if (!this.isGameEnding() && attacker.equals(this.warden) && attacked instanceof ServerPlayerEntity) {
+		if (!this.isGameEnding() && this.warden.isOf(attacker) && attacked instanceof ServerPlayerEntity) {
 			this.eliminate((ServerPlayerEntity) attacked, Text.translatable("text.sculkprison.eliminated.warden", attacked.getDisplayName(), attacker.getDisplayName()), true);
 		}
 		return ActionResult.FAIL;
@@ -115,13 +124,10 @@ public class SculkPrisonActivePhase implements PlayerAttackEntityEvent, GameActi
 	public void onEnable() {
 		for (ServerPlayerEntity player : this.players) {
 			player.changeGameMode(GameMode.ADVENTURE);
-
-			if (player.equals(this.warden)) {
-				WardenInventoryManager.applyTo(player);
-				player.addStatusEffect(new StatusEffectInstance(StatusEffects.BLINDNESS, StatusEffectInstance.INFINITE, 1, true, false));
-			}
-			SculkPrisonActivePhase.spawn(this.world, this.map, player, player.equals(this.warden));
+			SculkPrisonActivePhase.spawn(this.world, this.map, player, this.warden.isOf(player));
 		}
+
+		this.warden.initialize();
 	}
 
 	@Override
@@ -154,6 +160,8 @@ public class SculkPrisonActivePhase implements PlayerAttackEntityEvent, GameActi
 			}
 		}
 
+		this.warden.tick();
+
 		if (!this.singleplayer) this.checkWinners();
 		if (this.surviveTime < 0) this.endWithWinner(WinTeam.PLAYERS);
 		if (this.players.isEmpty()) this.endWithNoWinners();
@@ -168,7 +176,7 @@ public class SculkPrisonActivePhase implements PlayerAttackEntityEvent, GameActi
 
 	@Override
 	public ActionResult onDeath(ServerPlayerEntity player, DamageSource source) {
-		SculkPrisonActivePhase.spawn(this.world, this.map, player, player.equals(this.warden));
+		SculkPrisonActivePhase.spawn(this.world, this.map, player, this.warden.isOf(player));
 		return ActionResult.FAIL;
 	}
 
@@ -242,7 +250,7 @@ public class SculkPrisonActivePhase implements PlayerAttackEntityEvent, GameActi
 	 * {@linkplain SculkPrisonActivePhase#surviveTime Survive time} is not checked using this method, and singleplayer never checks win conditions.
 	 */
 	private void checkWinners() {
-		if (!this.players.contains(this.warden)) {
+		if (!this.warden.isIn(players)) {
 			this.endWithWinner(WinTeam.PLAYERS);
 		} else if (this.players.size() == 1) {
 			this.endWithWinner(WinTeam.WARDEN);

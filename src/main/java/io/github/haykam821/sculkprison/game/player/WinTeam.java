@@ -1,4 +1,4 @@
-package io.github.haykam821.sculkprison.game;
+package io.github.haykam821.sculkprison.game.player;
 
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
