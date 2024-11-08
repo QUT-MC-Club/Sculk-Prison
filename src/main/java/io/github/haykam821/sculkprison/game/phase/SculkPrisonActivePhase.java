@@ -205,10 +205,12 @@ public class SculkPrisonActivePhase implements WardenDataListener, PlayerAttackE
 	 * Eliminates a given player and prints a custom message to the chat.
 	 * @param remove whether to remove the player from {@link SculkPrisonActivePhase#players}
 	 */
-	private void eliminate(ServerPlayerEntity player, Text message, boolean remove) {
+	public void eliminate(ServerPlayerEntity player, Text message, boolean remove) {
 		if (this.isGameEnding()) return;
 
 		this.gameSpace.getPlayers().sendMessage(message);
+
+		this.warden.removeSonicBoomTargetsFor(player);
 
 		if (remove) {
 			this.players.remove(player);
@@ -270,6 +272,10 @@ public class SculkPrisonActivePhase implements WardenDataListener, PlayerAttackE
 
 	private boolean isGameEnding() {
 		return this.ticksUntilClose >= 0;
+	}
+
+	public List<ServerPlayerEntity> getPlayers() {
+		return this.players;
 	}
 
 	/**

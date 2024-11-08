@@ -1,21 +1,14 @@
 package io.github.haykam821.sculkprison.game.player;
 
-import org.joml.Vector3fc;
-
 import net.minecraft.enchantment.Enchantments;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemConvertible;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
-import net.minecraft.particle.DustColorTransitionParticleEffect;
 import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.math.MathHelper;
 import xyz.nucleoid.plasmid.util.ItemStackBuilder;
 
 public class WardenInventoryManager {
-	private static final int ARMOR_COLOR = 0x649683;
-	private static final int ACTIVE_ARMOR_COLOR = packRgb(DustColorTransitionParticleEffect.SCULK_BLUE);
-
 	public static final ItemStack HELMET = WardenInventoryManager.createArmorStack(Items.LEATHER_HELMET, false);
 	public static final ItemStack CHESTPLATE = WardenInventoryManager.createArmorStack(Items.LEATHER_CHESTPLATE, false);
 	public static final ItemStack LEGGINGS = WardenInventoryManager.createArmorStack(Items.LEATHER_LEGGINGS, false);
@@ -52,12 +45,8 @@ public class WardenInventoryManager {
 	private static ItemStack createArmorStack(ItemConvertible item, boolean active) {
 		return ItemStackBuilder.of(item)
 			.addEnchantment(Enchantments.BINDING_CURSE, 1)
-			.setDyeColor(active ? ACTIVE_ARMOR_COLOR : ARMOR_COLOR)
+			.setDyeColor(active ? WardenColors.ACTIVE_ARMOR : WardenColors.INACTIVE_ARMOR)
 			.setUnbreakable()
 			.build();
-	}
-
-	private static int packRgb(Vector3fc color) {
-		return MathHelper.packRgb(color.x(), color.y(), color.z());
 	}
 }

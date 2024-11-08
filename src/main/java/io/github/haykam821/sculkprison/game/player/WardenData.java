@@ -1,27 +1,38 @@
 package io.github.haykam821.sculkprison.game.player;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BiConsumer;
 
 import io.github.haykam821.sculkprison.game.phase.SculkPrisonActivePhase;
+import io.github.haykam821.sculkprison.game.player.target.SonicBoomTarget;
+import io.github.haykam821.sculkprison.game.player.target.SonicBoomTargetSelection;
+import io.github.haykam821.sculkprison.game.player.target.StaticSonicBoomTarget;
+import io.github.haykam821.sculkprison.game.player.target.TrackingSonicBoomTarget;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import net.minecraft.SharedConstants;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.entity.effect.StatusEffectInstance;
 import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.mob.Angriness;
+import net.minecraft.particle.ParticleTypes;
+import net.minecraft.server.network.ServerPlayNetworkHandler;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvent;
 import net.minecraft.sound.SoundEvents;
+import net.minecraft.text.Text;
 import net.minecraft.util.Util;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.math.random.Random;
 import net.minecraft.world.event.GameEvent;
 import net.minecraft.world.event.GameEvent.Emitter;
@@ -38,6 +49,9 @@ public class WardenData implements Vibrations {
 
 	private static final int MAX_VIBRATION_COOLDOWN = SharedConstants.TICKS_PER_SECOND * 2;
 
+	private static final int SONIC_BOOM_DAMAGE_RADIUS = 1;
+	private static final int SONIC_BOOM_DAMAGE_RADIUS_SQUARED = SONIC_BOOM_DAMAGE_RADIUS * SONIC_BOOM_DAMAGE_RADIUS;
+
 	private final SculkPrisonActivePhase phase;
 	private final ServerPlayerEntity player;
 
@@ -46,6 +60,9 @@ public class WardenData implements Vibrations {
 	private final EntityGameEventHandler<Vibrations.VibrationListener> gameEventHandler = new EntityGameEventHandler<>(new Vibrations.VibrationListener(this));
 
 	private final Object2IntMap<Entity> suspectsToAngerLevel = new Object2IntOpenHashMap<>();
+
+	private final List<SonicBoomTarget> sonicBoomTargets = new ArrayList<>();
+	private final SonicBoomTargetSelection sonicBoomTargetSelection = new SonicBoomTargetSelection(this);
 
 	private int maximumAnger;
 	private boolean angerDirty;
@@ -91,6 +108,112 @@ public class WardenData implements Vibrations {
 		}
 
 		Vibrations.Ticker.tick(this.player.getWorld(), this.vibrationListenerData, this.vibrationCallback);
+
+		for (SonicBoomTarget target : this.sonicBoomTargets) {
+			target.tick();
+		}
+
+		this.sonicBoomTargetSelection.tick();
+	}
+
+	public void createSonicBoom(SonicBoomTarget target) {
+		ServerWorld world = this.player.getServerWorld();
+
+		// Determine a line from the warden to the target
+		Vec3d startPos = this.getSonicBoomStartPos();
+		Vec3d endPos = target.getPos();
+
+		Vec3d offset = endPos.subtract(startPos);
+		Vec3d normalizedOffset = offset.normalize();
+
+		// Create particles along the line
+		for (int index = 1; index < MathHelper.floor(offset.length()) + 7; index += 1) {
+			Vec3d stepPos = startPos.add(normalizedOffset.multiply(index));
+			world.spawnParticles(ParticleTypes.SONIC_BOOM, stepPos.getX(), stepPos.getY(), stepPos.getZ(), 1, 0, 0, 0, 0);
+		}
+
+		// Play the sonic boom sound
+		this.playSound(SoundEvents.ENTITY_WARDEN_SONIC_BOOM, 3, 1);
+
+		// Apply entity damage and knockback effects
+		Iterator<ServerPlayerEntity> iterator = this.phase.getPlayers().iterator();
+
+		while (iterator.hasNext()) {
+			ServerPlayerEntity player = iterator.next();
+
+			if (player == this.player) continue;
+			if (player.getPos().squaredDistanceTo(endPos) > SONIC_BOOM_DAMAGE_RADIUS_SQUARED) continue;
+
+			this.phase.eliminate(player, Text.translatable("text.sculkprison.eliminated.sonic_boom", player.getDisplayName(), this.player.getDisplayName()), false);
+			iterator.remove();
+
+			double knockbackResistance = player.getAttributeValue(EntityAttributes.GENERIC_KNOCKBACK_RESISTANCE);
+
+			double horizontalKnockbackScale = 2.5 * (1.0 - knockbackResistance);
+			double verticalKnockbackScale = 0.5 * (1.0 - knockbackResistance);
+
+			double velocityX = normalizedOffset.getX() * horizontalKnockbackScale;
+			double velocityY = normalizedOffset.getY() * verticalKnockbackScale;
+			double velocityZ = normalizedOffset.getZ() * horizontalKnockbackScale;
+
+			player.addVelocity(velocityX, velocityY, velocityZ);
+		}
+	}
+
+	public boolean isAttemptingSonicBoom() {
+		return this.player.isUsingItem() || this.player.isSneaking();
+	}
+
+	private Vec3d getSonicBoomStartPos() {
+		return this.player.getPos().add(0, 1.6, 0);
+	}
+
+	public Collection<SonicBoomTarget> getSonicBoomTargets() {
+		return this.sonicBoomTargets;
+	}
+
+	private void addSonicBoomTarget(SonicBoomTarget target) {
+		if (!this.sonicBoomTargets.contains(target)) {
+			this.sonicBoomTargets.add(target);
+			target.attach(this, this.player.getServerWorld());
+		}
+	}
+
+	public void removeSonicBoomTargetsFor(Entity entity) {
+		Iterator<SonicBoomTarget> iterator = this.sonicBoomTargets.iterator();
+
+		while (iterator.hasNext()) {
+			SonicBoomTarget target = iterator.next();
+
+			if (entity == target.getEntity()) {
+				target.destroy();
+				iterator.remove();
+			}
+		}
+	}
+
+	private void addSonicBoomTargetForVibration(Entity entity) {
+		if (entity != null) {
+			int anger = this.suspectsToAngerLevel.getInt(entity);
+
+			if (anger >= MAX_ANGER) {
+				this.addSonicBoomTarget(new TrackingSonicBoomTarget(entity));
+			} else {
+				this.addSonicBoomTarget(new StaticSonicBoomTarget(entity.getPos()));
+			}
+		}
+	}
+
+	public ServerPlayNetworkHandler getNetworkHandler() {
+		return this.player.networkHandler;
+	}
+
+	public Vec3d getEyePos() {
+		return this.player.getEyePos();
+	}
+
+	public Vec3d getIdealSonicBoomTargetPos() {
+		return Vec3d.fromPolar(this.player.getPitch(), this.player.getYaw());
 	}
 
 	public boolean isOf(Entity player) {
@@ -102,7 +225,11 @@ public class WardenData implements Vibrations {
 	}
 
 	private void playSound(SoundEvent sound, float volume) {
-		this.player.getWorld().playSoundFromEntity(null, this.player, sound, SoundCategory.PLAYERS, volume, this.player.getSoundPitch());
+		this.playSound(sound, volume, this.player.getSoundPitch());
+	}
+
+	public void playSound(SoundEvent sound, float volume, float pitch) {
+		this.player.getWorld().playSoundFromEntity(null, this.player, sound, SoundCategory.PLAYERS, volume, pitch);
 	}
 
 	private int getHeartRate() {
@@ -187,8 +314,10 @@ public class WardenData implements Vibrations {
 		if (entity instanceof ServerPlayerEntity) {
 			int angerIncrease = this.player.isInRange(entity, 30) ? ANGRINESS_INCREASE : MINOR_ANGRINESS_INCREASE;
 			this.addAnger(entity, angerIncrease, true);
+			this.addSonicBoomTargetForVibration(entity);
 		} else {
 			this.addAnger(sourceEntity, ANGRINESS_INCREASE, true);
+			this.addSonicBoomTargetForVibration(sourceEntity);
 		}
 	}
 
